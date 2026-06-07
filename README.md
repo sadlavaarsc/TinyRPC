@@ -1,108 +1,136 @@
 # TinyRPC
 
-一个手写的高性能 Go 语言 RPC 框架，用于深入理解 RPC 核心原理。本项目从零实现了协议编解码、服务注册发现、负载均衡、熔断限流、TCP 服务端与客户端等完整链路。
+TinyRPC 是一个轻量级、教学友好的 Go 语言 RPC 框架。它从零开始构建，涵盖自定义二进制协议、TCP 通信、服务注册与发现、负载均衡、熔断器、限流器等微服务核心能力，适合作为学习 RPC 原理与分布式系统基础设施的参考实现。
 
-## 架构设计
+## 特性
+
+- **自定义二进制协议**：基于魔数 + 长度字段的消息头设计，支持请求、响应、心跳三种消息类型。
+- **服务注册与发现**：内置基于 Etcd 的注册中心实现，支持 Lease 心跳保活与节点变更监听。
+- **多种负载均衡策略**：随机（Random）、轮询（RoundRobin）、加权一致性哈希（ConsistentHash）。
+- **熔断器**：基于滑动窗口计数器的 CLOSED / OPEN / HALF_OPEN 三态状态机，防止级联故障。
+- **限流器**：Token Bucket 令牌桶算法，支持固定速率填充与突发流量控制。
+- **连接池管理**：客户端内置简易 TCP 连接池，减少重复建连开销。
+- **服务端拦截器**：支持中间件扩展，可方便地接入日志、监控、鉴权等能力。
+
+## 架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Client 端                                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
-│  │ 服务发现  │──│ 负载均衡  │──│  熔断器   │──│  限流器   │        │
-│  │ Registry │  │ Balancer │  │  Breaker │  │  Limiter │        │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │
-│         │            │            │            │                │
-│         └────────────┴────────────┴────────────┘                │
-│                          │                                      │
-│                    ┌──────────┐                                 │
-│                    │ 连接池    │                                 │
-│                    │Conn Pool │                                 │
-│                    └────┬─────┘                                 │
-└─────────────────────────┼───────────────────────────────────────┘
-                          │ TCP
-┌─────────────────────────┼───────────────────────────────────────┐
-│                    Server 端                                     │
-│                    ┌────┴─────┐                                 │
-│                    │ TCP Server│                                 │
-│                    └────┬─────┘                                 │
-│                         │                                       │
-│              ┌──────────┼──────────┐                            │
-│              ▼          ▼          ▼                            │
-│         ┌────────┐ ┌────────┐ ┌────────┐                       │
-│         │ Codec  │ │Router  │ │Limiter │                       │
-│         │编解码   │ │请求路由 │ │限流防护 │                       │
-│         └────────┘ └────────┘ └────────┘                       │
-│                         │                                       │
-│                    ┌────┴────┐                                  │
-│                    │ Service │                                  │
-│                    │ Handler │                                  │
-│                    └─────────┘                                  │
-│                                                                 │
-│         ┌──────────────────────────────────────┐                │
-│         │           Registry (Etcd)             │                │
-│         │  服务注册 / 心跳保活 / 服务发现 / 监听变更 │                │
-│         └──────────────────────────────────────┘                │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+│   Client    │<---->|   Codec     |<---->|   Server    |
+│  (连接池)    |      | (二进制协议)  |      | (服务注册表) |
+└──────┬──────┘      └─────────────┘      └──────┬──────┘
+       |                                          |
+       v                                          v
+┌─────────────┐                          ┌─────────────┐
+| LoadBalance |                          |  Registry   |
+|CircuitBreaker|                         |   (Etcd)    |
+|  RateLimit  |                          └─────────────┘
+└─────────────┘
 ```
-
-## 核心模块
-
-| 模块 | 路径 | 说明 |
-|------|------|------|
-| 协议层 | `codec/` `protocol/` | 自定义二进制协议（Header + Body），模拟 protobuf 编解码 |
-| 服务注册发现 | `registry/` | 基于 Etcd 实现，支持心跳保活与节点变更监听 |
-| 负载均衡 | `loadbalance/` | 随机、轮询、加权一致性哈希三种策略 |
-| 熔断器 | `circuitbreaker/` | 滑动窗口计数器，支持 Closed/Open/Half-Open 三态 |
-| 限流 | `ratelimit/` | Token Bucket 令牌桶算法 |
-| 服务端 | `server/` | TCP 服务端，支持服务注册、拦截器、并发处理 |
-| 客户端 | `client/` | 同步调用，集成连接池、负载均衡、熔断、限流 |
 
 ## 快速开始
 
 ### 1. 启动服务端
 
-```bash
-cd demo/server
-go run main.go
-```
+```go
+package main
 
-服务端默认监听 `:8888`，提供 `HelloService.SayHello` 方法。
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "TinyRPC/ratelimit"
+    "TinyRPC/server"
+)
+
+type HelloService interface {
+    SayHello(ctx context.Context, req *HelloRequest) (*HelloResponse, error)
+}
+
+type HelloRequest struct { Name string `json:"name"` }
+type HelloResponse struct { Message string `json:"message"` }
+
+type helloServiceImpl struct{}
+
+func (s *helloServiceImpl) SayHello(ctx context.Context, req *HelloRequest) (*HelloResponse, error) {
+    return &HelloResponse{Message: fmt.Sprintf("Hello, %s!", req.Name)}, nil
+}
+
+func main() {
+    limiter := ratelimit.NewTokenBucket(200, 100)
+    srv := server.NewServer(
+        server.WithRateLimiter(limiter),
+    )
+
+    sd := &server.ServiceDesc{
+        ServiceName: "HelloService",
+        HandlerType: (*HelloService)(nil),
+        Methods: []server.MethodDesc{{
+            MethodName: "SayHello",
+            Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor server.Interceptor) (interface{}, error) {
+                in := new(HelloRequest)
+                if err := dec(in); err != nil { return nil, err }
+                return srv.(HelloService).SayHello(ctx, in)
+            },
+        }},
+    }
+    srv.RegisterService(sd, &helloServiceImpl{})
+    log.Fatal(srv.Serve(":8888"))
+}
+```
 
 ### 2. 启动客户端
 
-```bash
-cd demo/client
-go run main.go
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    "TinyRPC/client"
+    "TinyRPC/loadbalance"
+    "TinyRPC/registry"
+)
+
+type HelloRequest struct { Name string `json:"name"` }
+type HelloResponse struct { Message string `json:"message"` }
+
+func main() {
+    reg, _ := registry.NewEtcdRegistry([]string{"localhost:2379"})
+    c := client.NewClient(
+        client.WithRegistry(reg),
+        client.WithBalancer(loadbalance.NewRandomBalancer()),
+    )
+
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    req := &HelloRequest{Name: "TinyRPC"}
+    resp := new(HelloResponse)
+    if err := c.Call(ctx, "HelloService", "SayHello", req, resp); err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(resp.Message)
+}
 ```
 
-客户端通过 Etcd 发现服务（如未连接 Etcd 则降级处理），使用轮询策略选择节点，发起同步调用并打印响应。
-
-## 技术亮点
-
-- **自定义二进制协议**：基于 `binary.BigEndian` 实现紧凑的消息头，包含魔数校验、版本控制、消息类型标识
-- **Etcd 服务治理**：利用 Lease 机制实现自动过期与心跳续期，Watch 机制实时感知节点变更
-- **加权一致性哈希**：每个实例按权重生成虚拟节点，实现均匀分布与最小抖动
-- **滑动窗口熔断**：基于时间窗口统计成功/失败次数，支持半开状态自动恢复
-- **Token Bucket 限流**：支持固定速率填充与突发流量控制，提供阻塞与非阻塞两种接口
-- **连接池复用**：客户端维护 TCP 连接池，减少重复建连开销
-
-## 项目结构
+## 目录结构
 
 ```
 TinyRPC/
-├── README.md
-├── go.mod
-├── codec/              # 二进制编解码
-├── protocol/           # 协议结构定义
-├── registry/           # Etcd 服务注册发现
-├── loadbalance/        # 负载均衡策略
-├── circuitbreaker/     # 熔断器
-├── ratelimit/          # 令牌桶限流
-├── server/             # TCP 服务端
-├── client/             # RPC 客户端
-└── demo/               # 示例代码
-    ├── server/
-    └── client/
+├── codec/              # 自定义二进制编解码
+├── protocol/           # RPC 消息结构（Request / Response）
+├── registry/           # Etcd 服务注册与发现
+├── loadbalance/        # 负载均衡（随机、轮询、一致性哈希）
+├── circuitbreaker/     # 熔断器（滑动窗口 + 三态状态机）
+├── ratelimit/          # 限流器（Token Bucket）
+├── server/             # TCP 服务端、服务注册表、反射调用
+├── client/             # 客户端、连接池、集成 LB / 熔断 / 限流
+└── demo/               # 服务端与客户端示例
 ```
 
 ## 许可证

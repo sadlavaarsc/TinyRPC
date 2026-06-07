@@ -19,42 +19,42 @@ import (
 	"TinyRPC/registry"
 )
 
-// Client 定义 RPC 客户端
+// Client 定义 RPC 客户端。
 type Client struct {
-	mu          sync.RWMutex
-	registry    registry.Registry
-	balancer    loadbalance.Balancer
-	breakers    map[string]*circuitbreaker.Breaker
-	limiter     ratelimit.Limiter
-	connPool    *pool
-	requestID   uint64
+	mu       sync.RWMutex
+	registry registry.Registry
+	balancer loadbalance.Balancer
+	breakers map[string]*circuitbreaker.Breaker
+	limiter  ratelimit.Limiter
+	connPool *pool
+	requestID uint64
 }
 
-// Option 客户端配置选项
+// Option 客户端配置选项。
 type Option func(*Client)
 
-// WithRegistry 设置服务注册中心
+// WithRegistry 设置服务注册中心。
 func WithRegistry(r registry.Registry) Option {
 	return func(c *Client) {
 		c.registry = r
 	}
 }
 
-// WithBalancer 设置负载均衡器
+// WithBalancer 设置负载均衡器。
 func WithBalancer(b loadbalance.Balancer) Option {
 	return func(c *Client) {
 		c.balancer = b
 	}
 }
 
-// WithRateLimiter 设置客户端限流器
+// WithRateLimiter 设置客户端限流器。
 func WithRateLimiter(l ratelimit.Limiter) Option {
 	return func(c *Client) {
 		c.limiter = l
 	}
 }
 
-// NewClient 创建一个新的 RPC 客户端
+// NewClient 创建一个新的 RPC 客户端。
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		breakers: make(map[string]*circuitbreaker.Breaker),
@@ -66,8 +66,8 @@ func NewClient(opts ...Option) *Client {
 	return c
 }
 
-// Call 发起同步 RPC 调用
-// service: 服务名, method: 方法名, args: 请求参数, reply: 响应接收指针
+// Call 发起同步 RPC 调用。
+// service: 服务名, method: 方法名, args: 请求参数, reply: 响应接收指针（需为指针类型）。
 func (c *Client) Call(ctx context.Context, service, method string, args, reply interface{}) error {
 	if c.limiter != nil && !c.limiter.Allow() {
 		return ratelimit.ErrRateLimited
@@ -154,7 +154,7 @@ func (c *Client) Call(ctx context.Context, service, method string, args, reply i
 	return nil
 }
 
-// selectInstance 根据负载均衡策略选择一个服务实例
+// selectInstance 根据负载均衡策略选择一个服务实例。
 func (c *Client) selectInstance(service, method string) (*registry.ServiceInstance, error) {
 	if c.registry != nil && c.balancer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -169,7 +169,7 @@ func (c *Client) selectInstance(service, method string) (*registry.ServiceInstan
 	return nil, fmt.Errorf("client: no registry or balancer configured")
 }
 
-// getBreaker 获取或创建一个熔断器
+// getBreaker 获取或创建一个熔断器（按实例 ID 隔离）。
 func (c *Client) getBreaker(key string) *circuitbreaker.Breaker {
 	c.mu.RLock()
 	b, ok := c.breakers[key]
@@ -189,11 +189,11 @@ func (c *Client) getBreaker(key string) *circuitbreaker.Breaker {
 	return b
 }
 
-// pool 是一个简单的 TCP 连接池
+// pool 是一个简单的 TCP 连接池。
 type pool struct {
-	mu        sync.Mutex
-	conns     map[string][]net.Conn
-	maxIdle   int
+	mu          sync.Mutex
+	conns       map[string][]net.Conn
+	maxIdle     int
 	maxIdleTime time.Duration
 }
 

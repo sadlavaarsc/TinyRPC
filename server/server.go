@@ -16,7 +16,7 @@ import (
 	"TinyRPC/ratelimit"
 )
 
-// ServiceDesc 描述一个 RPC 服务
+// ServiceDesc 描述一个 RPC 服务。
 type ServiceDesc struct {
 	// ServiceName 服务名
 	ServiceName string
@@ -26,21 +26,21 @@ type ServiceDesc struct {
 	Methods []MethodDesc
 }
 
-// MethodDesc 描述一个 RPC 方法
+// MethodDesc 描述一个 RPC 方法。
 type MethodDesc struct {
 	// MethodName 方法名
 	MethodName string
-	// Handler 方法处理器
+	// Handler 方法处理器，签名与 gRPC 类似：func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor Interceptor) (interface{}, error)
 	Handler func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor Interceptor) (interface{}, error)
 }
 
-// Interceptor 定义服务端拦截器（中间件）
+// Interceptor 定义服务端拦截器（中间件）。
 type Interceptor func(ctx context.Context, req interface{}, handler Handler) (resp interface{}, err error)
 
-// Handler 定义无拦截器时的处理方法
+// Handler 定义无拦截器时的处理方法。
 type Handler func(ctx context.Context, req interface{}) (interface{}, error)
 
-// Server 定义 RPC 服务端
+// Server 定义 RPC 服务端。
 type Server struct {
 	mu       sync.RWMutex
 	services map[string]*serviceInfo
@@ -57,7 +57,10 @@ type serviceInfo struct {
 	methods map[string]*MethodDesc
 }
 
-// NewServer 创建一个新的 RPC 服务端
+// ServerOption 服务端配置选项。
+type ServerOption func(*Server)
+
+// NewServer 创建一个新的 RPC 服务端。
 func NewServer(opts ...ServerOption) *Server {
 	s := &Server{
 		services: make(map[string]*serviceInfo),
@@ -69,24 +72,22 @@ func NewServer(opts ...ServerOption) *Server {
 	return s
 }
 
-// ServerOption 服务端配置选项
-type ServerOption func(*Server)
-
-// WithInterceptor 设置服务端拦截器
+// WithInterceptor 设置服务端拦截器。
 func WithInterceptor(in Interceptor) ServerOption {
 	return func(s *Server) {
 		s.interceptor = in
 	}
 }
 
-// WithRateLimiter 设置服务端限流器
+// WithRateLimiter 设置服务端限流器。
 func WithRateLimiter(l ratelimit.Limiter) ServerOption {
 	return func(s *Server) {
 		s.limiter = l
 	}
 }
 
-// RegisterService 注册一个服务到服务端
+// RegisterService 注册一个服务到服务端。
+// sd 为服务描述，srv 为实现该接口的具体实例。
 func (s *Server) RegisterService(sd *ServiceDesc, srv interface{}) error {
 	if sd == nil || srv == nil {
 		return fmt.Errorf("server: nil service desc or handler")
@@ -118,7 +119,7 @@ func (s *Server) RegisterService(sd *ServiceDesc, srv interface{}) error {
 	return nil
 }
 
-// Serve 在指定地址启动 TCP 监听并处理连接
+// Serve 在指定地址启动 TCP 监听并处理连接。
 func (s *Server) Serve(address string) error {
 	ln, err := net.Listen("tcp", address)
 	if err != nil {
@@ -138,7 +139,7 @@ func (s *Server) Serve(address string) error {
 	}
 }
 
-// handleConn 处理单个 TCP 连接上的请求
+// handleConn 处理单个 TCP 连接上的请求。
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
@@ -164,7 +165,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 }
 
-// processRequest 处理单个 RPC 请求
+// processRequest 处理单个 RPC 请求并发送响应。
 func (s *Server) processRequest(conn net.Conn, msg *codec.Message) {
 	if s.limiter != nil && !s.limiter.Allow() {
 		s.sendError(conn, msg.Header.RequestID, fmt.Errorf("rate limited"))
@@ -233,7 +234,7 @@ func (s *Server) processRequest(conn net.Conn, msg *codec.Message) {
 	_ = s.codec.Encode(conn, respMsg)
 }
 
-// sendError 向客户端发送错误响应
+// sendError 向客户端发送错误响应。
 func (s *Server) sendError(conn net.Conn, requestID uint64, err error) {
 	rpcResp := protocol.NewResponse(requestID, nil, err)
 	body, _ := protocol.EncodeResponse(rpcResp)
@@ -247,7 +248,7 @@ func (s *Server) sendError(conn net.Conn, requestID uint64, err error) {
 	_ = s.codec.Encode(conn, msg)
 }
 
-// Stop 关闭服务端监听
+// Stop 关闭服务端监听。
 func (s *Server) Stop() error {
 	if s.listener != nil {
 		return s.listener.Close()
