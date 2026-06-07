@@ -1,5 +1,5 @@
-// Package ratelimit 提供基于令牌桶的限流实现。
-// 支持固定速率填充令牌，突发流量受桶容量限制，可用于服务端接口保护或客户端调用控制。
+// Package ratelimit 提供基于 Token Bucket 算法的限流器实现。
+// 支持按固定速率填充令牌，突发流量可消耗桶内累积的令牌。
 package ratelimit
 
 import (
@@ -24,13 +24,15 @@ type Limiter interface {
 	Wait(ctx context.Context) error
 }
 
-// TokenBucket 实现令牌桶限流算法
+// TokenBucket 实现令牌桶限流算法。
+// 以固定速率向桶中填充令牌，请求需消耗令牌才能通过，
+// 桶容量决定了最大突发流量。
 type TokenBucket struct {
 	mu sync.Mutex
 
 	// capacity 桶容量（最大突发令牌数）
 	capacity int64
-	// tokens 当前可用令牌数
+	// tokens 当前可用令牌数（使用 float64 支持小数精度）
 	tokens float64
 	// rate 每秒填充速率
 	rate float64
@@ -38,9 +40,8 @@ type TokenBucket struct {
 	lastFill time.Time
 }
 
-// NewTokenBucket 创建一个新的令牌桶限流器
-// capacity: 桶容量，决定最大突发流量
-// rate: 每秒产生的令牌数，决定平均 QPS
+// NewTokenBucket 创建一个新的令牌桶限流器。
+// capacity 为桶容量（最大突发请求数），rate 为每秒允许通过的请求数。
 func NewTokenBucket(capacity int64, rate float64) *TokenBucket {
 	if capacity <= 0 {
 		capacity = 100
@@ -56,12 +57,12 @@ func NewTokenBucket(capacity int64, rate float64) *TokenBucket {
 	}
 }
 
-// Allow 尝试获取一个令牌，成功返回 true
+// Allow 尝试获取一个令牌，成功返回 true。
 func (tb *TokenBucket) Allow() bool {
 	return tb.AllowN(1)
 }
 
-// AllowN 尝试获取 n 个令牌，成功返回 true
+// AllowN 尝试获取 n 个令牌，成功返回 true。
 func (tb *TokenBucket) AllowN(n int64) bool {
 	if n <= 0 {
 		return true
@@ -79,7 +80,7 @@ func (tb *TokenBucket) AllowN(n int64) bool {
 	return false
 }
 
-// Wait 阻塞等待直到获取到一个令牌，或 context 被取消/超时
+// Wait 阻塞等待直到获取到一个令牌，或 context 被取消/超时。
 func (tb *TokenBucket) Wait(ctx context.Context) error {
 	for {
 		if tb.Allow() {
@@ -107,7 +108,7 @@ func (tb *TokenBucket) Wait(ctx context.Context) error {
 	}
 }
 
-// refill 根据时间差补充令牌，补充量受容量上限限制
+// refill 根据时间差补充令牌，补充量受容量上限限制。
 func (tb *TokenBucket) refill() {
 	now := time.Now()
 	elapsed := now.Sub(tb.lastFill).Seconds()

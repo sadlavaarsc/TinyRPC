@@ -1,5 +1,5 @@
-// Package circuitbreaker 提供熔断器实现，基于滑动窗口计数器。
-// 当失败率达到阈值时自动熔断，经过冷却时间后进入半开状态试探恢复。
+// Package circuitbreaker 提供熔断器实现，用于保护下游服务免受级联故障影响。
+// 基于滑动窗口计数器实现 CLOSED / OPEN / HALF_OPEN 三态状态机。
 package circuitbreaker
 
 import (
@@ -27,6 +27,19 @@ const (
 	// StateHalfOpen 半开状态：允许少量请求试探
 	StateHalfOpen
 )
+
+func (s State) String() string {
+	switch s {
+	case StateClosed:
+		return "CLOSED"
+	case StateOpen:
+		return "OPEN"
+	case StateHalfOpen:
+		return "HALF_OPEN"
+	default:
+		return "UNKNOWN"
+	}
+}
 
 // Config 熔断器配置
 type Config struct {
@@ -75,6 +88,7 @@ func NewBreaker(name string, config *Config) *Breaker {
 		name:   name,
 		config: config,
 		window: newSlidingWindow(config.WindowSize),
+		state:  int32(StateClosed),
 	}
 }
 
@@ -160,9 +174,9 @@ func (b *Breaker) currentState() State {
 
 // slidingWindow 滑动窗口计数器
 type slidingWindow struct {
-	size      time.Duration
-	mu        sync.RWMutex
-	events    []event
+	size       time.Duration
+	mu         sync.RWMutex
+	events     []event
 	successCnt int64
 	failureCnt int64
 }

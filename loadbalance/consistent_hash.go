@@ -1,5 +1,3 @@
-// Package loadbalance 提供 TinyRPC 的负载均衡策略实现。
-// 包含随机、轮询、加权一致性哈希三种经典策略，支持动态节点变更。
 package loadbalance
 
 import (
@@ -13,19 +11,20 @@ import (
 
 // ConsistentHashBalancer 实现加权一致性哈希负载均衡策略。
 // 每个实例根据权重在哈希环上生成多个虚拟节点，以实现更均匀的分布。
+// 当实例增删时只有少量请求需要重新映射，适合有状态服务或缓存场景。
 type ConsistentHashBalancer struct {
 	mu        sync.RWMutex
 	instances []*registry.ServiceInstance
-	// 虚拟节点数 = weight * replicas
+	// replicas 为每个权重单位对应的虚拟节点数
 	replicas int
-	// 哈希环，有序存储所有虚拟节点的哈希值
+	// ring 哈希环，有序存储所有虚拟节点的哈希值
 	ring []uint32
-	// 哈希值到实例的映射
+	// nodes 哈希值到实例的映射
 	nodes map[uint32]*registry.ServiceInstance
 }
 
-// NewConsistentHashBalancer 创建一个新的 ConsistentHashBalancer
-// replicas 为每个权重单位对应的虚拟节点数
+// NewConsistentHashBalancer 创建一个新的一致性哈希负载均衡器。
+// replicas 为每个权重单位对应的虚拟节点数，建议 100-200。
 func NewConsistentHashBalancer(replicas int) Balancer {
 	if replicas <= 0 {
 		replicas = 150
@@ -36,12 +35,12 @@ func NewConsistentHashBalancer(replicas int) Balancer {
 	}
 }
 
-// Name 返回负载均衡器名称
+// Name 返回负载均衡器名称。
 func (b *ConsistentHashBalancer) Name() string {
 	return "consistent_hash"
 }
 
-// UpdateInstances 动态更新后端实例列表，并重建哈希环
+// UpdateInstances 动态更新后端实例列表，并重建哈希环。
 func (b *ConsistentHashBalancer) UpdateInstances(instances []*registry.ServiceInstance) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -58,7 +57,7 @@ func (b *ConsistentHashBalancer) UpdateInstances(instances []*registry.ServiceIn
 		virtualCount := weight * b.replicas
 		for i := 0; i < virtualCount; i++ {
 			key := inst.ID + "#" + strconv.Itoa(i)
-			hash := b.hash(key)
+			hash := crc32.ChecksumIEEE([]byte(key))
 			b.ring = append(b.ring, hash)
 			b.nodes[hash] = inst
 		}
@@ -69,7 +68,8 @@ func (b *ConsistentHashBalancer) UpdateInstances(instances []*registry.ServiceIn
 	})
 }
 
-// Select 根据 key 的哈希值在哈希环上顺时针查找最近的虚拟节点
+// Select 根据 key 的哈希值在哈希环上顺时针查找最近的虚拟节点。
+// 若 key 为空，则使用 "default" 作为兜底键。
 func (b *ConsistentHashBalancer) Select(key string) (*registry.ServiceInstance, error) {
 	if key == "" {
 		key = "default"
@@ -82,7 +82,7 @@ func (b *ConsistentHashBalancer) Select(key string) (*registry.ServiceInstance, 
 		return nil, ErrNoAvailableInstance
 	}
 
-	hash := b.hash(key)
+	hash := crc32.ChecksumIEEE([]byte(key))
 	idx := sort.Search(len(b.ring), func(i int) bool {
 		return b.ring[i] >= hash
 	})
@@ -91,9 +91,4 @@ func (b *ConsistentHashBalancer) Select(key string) (*registry.ServiceInstance, 
 	}
 
 	return b.nodes[b.ring[idx]], nil
-}
-
-// hash 计算字符串的 crc32 哈希值
-func (b *ConsistentHashBalancer) hash(key string) uint32 {
-	return crc32.ChecksumIEEE([]byte(key))
 }
